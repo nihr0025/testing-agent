@@ -18,7 +18,7 @@ SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 (TEST_SCRIPTS_DIR / "selenium").mkdir(parents=True, exist_ok=True)
 (BACKEND_DIR / "database").mkdir(parents=True, exist_ok=True)
 
-# Helper to load .env file manually if python-dotenv isn't installed yet
+# Helper to load .env file manually and populate os.environ
 def load_env_file(dotenv_path: Path):
     if not dotenv_path.exists():
         return
@@ -37,11 +37,19 @@ def load_env_file(dotenv_path: Path):
 load_env_file(BASE_DIR / ".env")
 
 class Config:
-    # OpenAI Settings
+    # OpenAI Settings (Read exclusively from environment)
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "")
 
-    # Jira Settings
+    # Google Gemini Settings (Read exclusively from environment)
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", ""))
+    GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", os.getenv("GEMINI_API_KEY", ""))
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "")
+
+    # Default Testing Mode (basic, openai, gemini)
+    DEFAULT_TESTING_MODE: str = os.getenv("DEFAULT_TESTING_MODE", "basic").lower()
+
+    # Jira Settings (Optional / MCP Integration)
     JIRA_URL: str = os.getenv("JIRA_URL", "")
     JIRA_EMAIL: str = os.getenv("JIRA_EMAIL", "")
     JIRA_API_TOKEN: str = os.getenv("JIRA_API_TOKEN", "")
@@ -50,7 +58,7 @@ class Config:
     JIRA_MCP_COMMAND: str = os.getenv("JIRA_MCP_COMMAND", "")
     JIRA_MCP_URL: str = os.getenv("JIRA_MCP_URL", "")
 
-    # Automation Framework
+    # Automation Framework (playwright or selenium)
     DEFAULT_AUTOMATION_FRAMEWORK: str = os.getenv("DEFAULT_AUTOMATION_FRAMEWORK", "playwright").lower()
 
     # Server Settings
@@ -59,25 +67,45 @@ class Config:
     FRONTEND_PORT: int = int(os.getenv("FRONTEND_PORT", "5173"))
 
     # Security: SSRF Protection
-    # By default, localhost and 127.0.0.1 are permitted for local demo / internal testing,
-    # but cloud metadata endpoints (e.g. 169.254.169.254) are strictly blocked.
     BLOCKED_HOSTS: List[str] = [
-        "169.254.169.254", # AWS/Azure/GCP metadata
+        "169.254.169.254", # Cloud metadata
         "metadata.google.internal",
         "instance-data"
     ]
 
     @classmethod
+    def reload_from_env(cls):
+        """Reloads credentials and configurations from the .env file."""
+        load_env_file(BASE_DIR / ".env")
+        cls.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+        cls.OPENAI_MODEL = os.getenv("OPENAI_MODEL", "")
+        cls.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", ""))
+        cls.GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", os.getenv("GEMINI_API_KEY", ""))
+        cls.GEMINI_MODEL = os.getenv("GEMINI_MODEL", "")
+        cls.DEFAULT_TESTING_MODE = os.getenv("DEFAULT_TESTING_MODE", "basic").lower()
+        cls.JIRA_URL = os.getenv("JIRA_URL", "")
+        cls.JIRA_EMAIL = os.getenv("JIRA_EMAIL", "")
+        cls.JIRA_API_TOKEN = os.getenv("JIRA_API_TOKEN", "")
+        cls.JIRA_MCP_URL = os.getenv("JIRA_MCP_URL", "")
+        cls.DEFAULT_AUTOMATION_FRAMEWORK = os.getenv("DEFAULT_AUTOMATION_FRAMEWORK", "playwright").lower()
+
+    @classmethod
     def get_masked_key(cls, key: str) -> str:
         if not key:
             return ""
-        if len(key) <= 8:
+        trimmed = key.strip()
+        if len(trimmed) <= 8:
             return "****"
-        return f"{key[:4]}...{key[-4:]}"
+        return f"{trimmed[:4]}...{trimmed[-4:]}"
 
     @classmethod
     def is_openai_configured(cls) -> bool:
         return bool(cls.OPENAI_API_KEY and len(cls.OPENAI_API_KEY.strip()) > 5)
+
+    @classmethod
+    def is_gemini_configured(cls) -> bool:
+        key = cls.GEMINI_API_KEY or cls.GOOGLE_API_KEY
+        return bool(key and len(key.strip()) > 5)
 
     @classmethod
     def is_jira_configured(cls) -> bool:

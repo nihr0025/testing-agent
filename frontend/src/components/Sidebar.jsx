@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import Logo from '../assets/branding/Logo';
 import {
   LayoutDashboard,
   PlusCircle,
@@ -54,6 +55,18 @@ export default function Sidebar({
   ];
 
   const isBasic = generationMode === 'basic';
+  const isGemini = generationMode === 'gemini';
+  const isAi = generationMode === 'openai' || generationMode === 'ai';
+
+  const getModeBadge = () => {
+    if (isGemini) {
+      return <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border shadow-2xs bg-blue-50 text-blue-700 border-blue-200">GEMINI</span>;
+    }
+    if (isAi) {
+      return <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border shadow-2xs bg-purple-50 text-purple-700 border-purple-200">OPENAI</span>;
+    }
+    return <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border shadow-2xs bg-amber-50 text-amber-700 border-amber-200">BASIC</span>;
+  };
 
   return (
     <aside
@@ -62,20 +75,15 @@ export default function Sidebar({
       }`}
     >
       {/* Brand Header */}
-      <div className="h-16 flex items-center justify-between px-5 border-b border-surface-200">
-        <div className="flex items-center gap-3 overflow-hidden">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-cyan-500 flex items-center justify-center shrink-0 shadow-sm">
-            <Layers className="w-5 h-5 text-white" />
-          </div>
-          {!collapsed && (
+      <div className="h-16 flex items-center justify-between px-4 border-b border-surface-200">
+        <div className="flex items-center gap-2.5 overflow-hidden">
+          {collapsed ? (
+            <div className="mx-auto" title="TraceAI Studio">
+              <Logo variant="icon" size={32} />
+            </div>
+          ) : (
             <div className="truncate">
-              <div className="flex items-center gap-1 font-bold tracking-tight text-surface-900 text-base leading-tight">
-                <span>TraceAI</span>
-                <span className="text-blue-600">Studio</span>
-              </div>
-              <div className="text-[10px] text-surface-500 font-mono tracking-wider uppercase font-semibold">
-                Autonomous QA
-              </div>
+              <Logo variant="full" size={32} />
             </div>
           )}
         </div>
@@ -139,13 +147,7 @@ export default function Sidebar({
               <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-white text-blue-700 border border-blue-200 shadow-2xs">
                 {selectedFramework?.toUpperCase() || 'PLAYWRIGHT'}
               </span>
-              <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border shadow-2xs ${
-                isBasic
-                  ? 'bg-amber-50 text-amber-700 border-amber-200'
-                  : 'bg-purple-50 text-purple-700 border-purple-200'
-              }`}>
-                {isBasic ? 'BASIC' : 'AI'}
-              </span>
+              {getModeBadge()}
             </div>
           </div>
 

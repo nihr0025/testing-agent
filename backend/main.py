@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.config import config, REPORTS_DIR, SCREENSHOTS_DIR, BACKEND_DIR
 from backend.database.db import init_db
-from backend.routes import testing, jira, reports, settings, demo
+from backend.routes import testing, jira, reports, settings, demo, ai_discovery
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,6 +47,7 @@ app.include_router(jira.router)
 app.include_router(reports.router)
 app.include_router(settings.router)
 app.include_router(demo.router)
+app.include_router(ai_discovery.router)
 
 # Mount static files for reports & screenshots
 app.mount("/static/reports", StaticFiles(directory=str(REPORTS_DIR)), name="reports")

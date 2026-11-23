@@ -7,7 +7,10 @@ class StartRunRequest(BaseModel):
     jira_issue_id: Optional[str] = Field(default="", description="Jira issue key/ID (optional)")
     manual_requirements: Optional[str] = Field(default="", description="Manual requirement text (optional)")
     automation_framework: str = Field(default="playwright", description="playwright or selenium")
-    generation_mode: str = Field(default="auto", description="ai, basic, or auto")
+    generation_mode: str = Field(default="basic", description="basic, gemini, or openai")
+    ai_provider: Optional[str] = Field(default=None, description="basic, gemini, or openai")
+    ai_model: Optional[str] = Field(default=None, description="Specific model ID to use for generation")
+    alternative_models: Optional[List[str]] = Field(default=[], description="Configured Gemini alternative models for failover")
 
 class AgentStateModel(BaseModel):
     agent_name: str
@@ -18,6 +21,11 @@ class AgentStateModel(BaseModel):
     completed_at: Optional[str] = None
     output_data: Optional[Any] = None
     error_message: Optional[str] = None
+    retries_count: Optional[int] = 0
+    selected_model: Optional[str] = ""
+    actual_model: Optional[str] = ""
+    models_attempted: Optional[List[str]] = []
+    error_category: Optional[str] = ""
 
 class RequirementModel(BaseModel):
     req_id: str
@@ -27,19 +35,23 @@ class RequirementModel(BaseModel):
     testable_conditions: List[str] = []
     missing_information: List[str] = []
     priority: str = "Medium"
-    generation_mode: str = "ai"
-    source: str = "AI-Powered"
+    generation_mode: str = "basic"
+    source: str = "Basic Inspection Engine"
+    ai_provider: Optional[str] = "basic"
+    ai_model: Optional[str] = ""
 
 class ScenarioModel(BaseModel):
     scenario_id: str
     req_id: str
     title: str
     description: Optional[str] = ""
-    scenario_type: str = "Functional" # Functional, Negative, Boundary, Navigation, Integration
+    scenario_type: str = "Functional"
     priority: str = "Medium"
     expected_behavior: Optional[str] = ""
-    generation_mode: str = "ai"
-    source: str = "AI-Powered"
+    generation_mode: str = "basic"
+    source: str = "Basic Scenario Engine"
+    ai_provider: Optional[str] = "basic"
+    ai_model: Optional[str] = ""
 
 class TestCaseModel(BaseModel):
     case_id: str
@@ -54,12 +66,14 @@ class TestCaseModel(BaseModel):
     framework: str = "playwright"
     script_path: Optional[str] = None
     code_snippet: Optional[str] = None
-    generation_mode: str = "ai"
-    source: str = "AI-Powered"
+    generation_mode: str = "basic"
+    source: str = "Basic Test Case Engine"
+    ai_provider: Optional[str] = "basic"
+    ai_model: Optional[str] = ""
 
 class ExecutionResultModel(BaseModel):
     case_id: str
-    status: str # Passed, Failed, Skipped
+    status: str
     actual_result: Optional[str] = ""
     expected_result: Optional[str] = ""
     error_message: Optional[str] = None
@@ -77,8 +91,10 @@ class TestRunSummary(BaseModel):
     jira_issue_id: Optional[str] = ""
     manual_requirements: Optional[str] = ""
     automation_framework: str = "playwright"
-    generation_mode: str = "ai"
+    generation_mode: str = "basic"
     mode_reason: Optional[str] = ""
+    ai_provider: Optional[str] = "basic"
+    ai_model: Optional[str] = ""
     total_tests: int = 0
     passed_tests: int = 0
     failed_tests: int = 0
@@ -98,26 +114,83 @@ class DashboardMetrics(BaseModel):
     covered_requirements: int
     total_scenarios: int
 
+class ModelInfo(BaseModel):
+    id: str
+    name: str
+    description: str
+    is_free_tier: bool = False
+    is_default: bool = False
+
+class ValidateModelRequest(BaseModel):
+    model_id: str = Field(description="The exact model ID to validate via live API probe")
+
+class ValidateModelResponse(BaseModel):
+    valid: bool
+    provider: str
+    model_id: str
+    latency_ms: int = 0
+    message: str
+    error_type: Optional[str] = None
+
+class DiscoveryResultModel(BaseModel):
+    provider: str
+    models: List[ModelInfo] = []
+    cached: bool = False
+    cache_age_seconds: Optional[float] = 0.0
+    error: Optional[str] = None
+    error_type: Optional[str] = None
+    message: Optional[str] = ""
+
+class ProviderInfoModel(BaseModel):
+    id: str
+    name: str
+    badge: str
+    description: str
+    is_configured: bool
+    masked_key: str
+    env_var: Optional[str] = None
+    default_model: Optional[str] = None
+
+class ProviderTestResult(BaseModel):
+    valid: bool
+    status: str
+    message: str
+    provider: str
+    model: Optional[str] = None
+
 class SettingsModel(BaseModel):
+    # Testing Mode
+    default_testing_mode: str
+    default_automation_framework: str
+
+    # OpenAI Info
     openai_configured: bool
     openai_model: str
-    masked_api_key: str
+    openai_masked_key: str
+
+    # Gemini Info
+    gemini_configured: bool
+    gemini_model: str
+    gemini_masked_key: str
+
+    # Jira Info
     jira_configured: bool
     jira_url: str
     jira_email: str
-    default_automation_framework: str
     jira_mcp_url: Optional[str] = ""
-    default_generation_mode: str = "auto"
+
+    # Helpful instruction strings
+    instructions: Dict[str, str] = {}
 
 class UpdateSettingsRequest(BaseModel):
-    openai_api_key: Optional[str] = None
     openai_model: Optional[str] = None
+    gemini_model: Optional[str] = None
+    default_testing_mode: Optional[str] = None
+    default_automation_framework: Optional[str] = None
     jira_url: Optional[str] = None
     jira_email: Optional[str] = None
     jira_api_token: Optional[str] = None
-    default_automation_framework: Optional[str] = None
     jira_mcp_url: Optional[str] = None
-    default_generation_mode: Optional[str] = None
 
 class JiraIssueItem(BaseModel):
     key: str

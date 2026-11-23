@@ -58,7 +58,11 @@ export default function Reports({ activeRunId }) {
   }
 
   const metrics = report.metrics || {};
-  const isBasic = report.generation_mode === 'basic';
+  const provider = report.ai_provider || report.generation_mode || 'basic';
+  const isGemini = provider === 'gemini';
+  const isAi = provider === 'openai' || provider === 'ai';
+  const isBasic = !isGemini && !isAi;
+  const modelName = report.ai_model;
 
   return (
     <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-6">
@@ -68,12 +72,28 @@ export default function Reports({ activeRunId }) {
           <div className="flex flex-wrap items-center gap-2.5">
             <h1 className="text-2xl font-bold text-surface-900 tracking-tight">Consolidated QA Report</h1>
             <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase border ${
-              isBasic
-                ? 'bg-amber-50 text-amber-800 border-amber-200'
-                : 'bg-purple-50 text-purple-800 border-purple-200'
+              isGemini
+                ? 'bg-blue-50 text-blue-800 border-blue-200'
+                : isAi
+                ? 'bg-purple-50 text-purple-800 border-purple-200'
+                : 'bg-amber-50 text-amber-800 border-amber-200'
             }`}>
-              {isBasic ? <Zap className="w-2.5 h-2.5 text-amber-600" /> : <Bot className="w-2.5 h-2.5 text-purple-600" />}
-              <span>{isBasic ? 'BASIC MODE' : 'AI-POWERED MODE'}</span>
+              {isGemini ? (
+                <>
+                  <Sparkles className="w-2.5 h-2.5 text-blue-600" />
+                  <span>GEMINI{modelName ? ` — ${modelName}` : ''}</span>
+                </>
+              ) : isAi ? (
+                <>
+                  <Bot className="w-2.5 h-2.5 text-purple-600" />
+                  <span>OPENAI{modelName ? ` — ${modelName}` : ''}</span>
+                </>
+              ) : (
+                <>
+                  <Zap className="w-2.5 h-2.5 text-amber-600" />
+                  <span>BASIC MODE</span>
+                </>
+              )}
             </span>
             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase bg-blue-50 text-blue-700 border border-blue-200">
               {report.automation_framework?.toUpperCase() || 'PLAYWRIGHT'}

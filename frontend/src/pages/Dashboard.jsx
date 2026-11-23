@@ -1,4 +1,5 @@
 import React from 'react';
+import Logo from '../assets/branding/Logo';
 import {
   FileCheck,
   Link as LinkIcon,
@@ -225,7 +226,7 @@ export default function Dashboard({ metrics, runs, onSelectRun, onNewRunClick })
       <div className="bg-white border border-surface-200 rounded-xl p-5 shadow-2xs">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <Bot className="w-4 h-4 text-blue-600" />
+            <Logo variant="icon" size={20} />
             <h2 className="text-xs font-bold text-surface-900 uppercase tracking-wider font-mono">
               TraceAI Autonomous Agent Fleet
             </h2>
@@ -403,23 +404,33 @@ export default function Dashboard({ metrics, runs, onSelectRun, onNewRunClick })
                       {run.website_url || run.manual_requirements || run.jira_issue_id || 'System Test'}
                     </td>
                     <td className="py-3 px-4">
-                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold uppercase border ${
-                        run.generation_mode === 'basic'
-                          ? 'bg-amber-50 text-amber-800 border-amber-200'
-                          : 'bg-purple-50 text-purple-800 border-purple-200'
-                      }`}>
-                        {run.generation_mode === 'basic' ? (
-                          <>
-                            <Zap className="w-2.5 h-2.5 text-amber-600" />
-                            <span>Basic</span>
-                          </>
-                        ) : (
-                          <>
-                            <Bot className="w-2.5 h-2.5 text-purple-600" />
-                            <span>AI Mode</span>
-                          </>
-                        )}
-                      </span>
+                      {(() => {
+                        const prov = run.ai_provider || run.generation_mode || 'basic';
+                        const isGem = prov === 'gemini';
+                        const isOAI = prov === 'openai' || prov === 'ai';
+                        const label = isGem
+                          ? `Gemini${run.ai_model ? ` • ${run.ai_model}` : ''}`
+                          : isOAI
+                          ? `OpenAI${run.ai_model ? ` • ${run.ai_model}` : ''}`
+                          : 'Basic Mode';
+                        const badgeClass = isGem
+                          ? 'bg-blue-50 text-blue-800 border-blue-200'
+                          : isOAI
+                          ? 'bg-purple-50 text-purple-800 border-purple-200'
+                          : 'bg-amber-50 text-amber-800 border-amber-200';
+                        return (
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold uppercase border ${badgeClass}`}>
+                            {isGem ? (
+                              <Sparkles className="w-2.5 h-2.5 text-blue-600" />
+                            ) : isOAI ? (
+                              <Bot className="w-2.5 h-2.5 text-purple-600" />
+                            ) : (
+                              <Zap className="w-2.5 h-2.5 text-amber-600" />
+                            )}
+                            <span>{label}</span>
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="py-3 px-4 font-mono text-surface-700 font-medium uppercase text-[11px]">
                       {run.automation_framework}

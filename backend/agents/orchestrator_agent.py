@@ -2,7 +2,8 @@ import logging
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
+from backend.services.ai_service import ai_service
 
 from backend.config import REPORTS_DIR
 from backend.database.db import (
@@ -43,78 +44,131 @@ class OrchestrationAgent:
         jira_project: str = "",
         jira_issue_id: str = "",
         automation_framework: str = "playwright",
-        generation_mode: str = "auto"
+        generation_mode: str = "basic",
+        ai_model: Optional[str] = None,
+        alternative_models: Optional[List[str]] = None
     ) -> Dict[str, Any]:
-        logger.info(f"[{self.run_id}] Orchestrator starting workflow with {automation_framework.upper()} ({generation_mode.upper()} mode)...")
+        logger.info(
+            f"[{self.run_id}] Orchestrator starting workflow with {automation_framework.upper()} "
+            f"(Mode: {generation_mode.upper()}, Model: {ai_model or 'default'}, Alternatives: {alternative_models or []})..."
+        )
         update_run_status(self.run_id, "RUNNING")
         update_agent_status(self.run_id, self.agent_name, "RUNNING")
+
+        current_stage = "Initialization"
+        requirements = []
+        scenarios = []
+        test_cases = []
+        automation_scripts = []
+        execution_results = []
+        actual_model_used = ai_model or ""
+        total_orchestrator_retries = 0
 
         try:
             # -------------------------------------------------------------
             # STAGE 1: Requirement Analysis Agent
             # -------------------------------------------------------------
+            current_stage = "Requirement Analysis"
             req_agent = RequirementAnalysisAgent(self.run_id)
-            requirements, actual_mode, fallback_reason = self._execute_with_retry(
-                lambda: req_agent.execute(
-                    website_url=website_url,
-                    manual_requirements=manual_requirements,
-                    jira_project=jira_project,
-                    jira_issue_id=jira_issue_id,
-                    generation_mode=generation_mode
-                ),
-                stage_name="Requirement Analysis"
+            requirements, actual_mode, fallback_reason = req_agent.execute(
+                website_url=website_url,
+                manual_requirements=manual_requirements,
+                jira_project=jira_project,
+                jira_issue_id=jira_issue_id,
+                generation_mode=generation_mode,
+                ai_model=ai_model,
+                alternative_models=alternative_models
             )
 
-            # Update run mode in case fallback occurred
-            update_run_mode(self.run_id, actual_mode, fallback_reason or "")
+            meta1 = ai_service.last_execution_metadata or {}
+            if meta1.get("actual_model"):
+                actual_model_used = meta1.get("actual_model")
+            total_orchestrator_retries += meta1.get("retries_count", 0)
+
+            # Update run mode in case actual model or provider adjusted
+            update_run_mode(
+                self.run_id,
+                actual_mode,
+                fallback_reason or "",
+                ai_provider=actual_mode,
+                ai_model=actual_model_used
+            )
 
             # -------------------------------------------------------------
             # STAGE 2: Test Scenario Generation Agent
             # -------------------------------------------------------------
+            current_stage = "Scenario Generation"
             sc_agent = TestScenarioGenerationAgent(self.run_id)
-            scenarios = self._execute_with_retry(
-                lambda: sc_agent.execute(requirements, generation_mode=actual_mode),
-                stage_name="Scenario Generation"
+            scenarios = sc_agent.execute(
+                requirements,
+                generation_mode=actual_mode,
+                ai_model=actual_model_used,
+                alternative_models=alternative_models
             )
+
+            meta2 = ai_service.last_execution_metadata or {}
+            if meta2.get("actual_model"):
+                actual_model_used = meta2.get("actual_model")
+            total_orchestrator_retries += meta2.get("retries_count", 0)
 
             # -------------------------------------------------------------
             # STAGE 3: Test Case Design Agent
             # -------------------------------------------------------------
+            current_stage = "Test Case Design"
             tc_agent = TestCaseDesignAgent(self.run_id, framework=automation_framework)
-            test_cases = self._execute_with_retry(
-                lambda: tc_agent.execute(scenarios, generation_mode=actual_mode),
-                stage_name="Test Case Design"
+            test_cases = tc_agent.execute(
+                scenarios,
+                generation_mode=actual_mode,
+                ai_model=actual_model_used,
+                alternative_models=alternative_models
             )
+
+            meta3 = ai_service.last_execution_metadata or {}
+            if meta3.get("actual_model"):
+                actual_model_used = meta3.get("actual_model")
+            total_orchestrator_retries += meta3.get("retries_count", 0)
 
             # -------------------------------------------------------------
             # STAGE 4: Test Automation Agent (Playwright or Selenium)
             # -------------------------------------------------------------
+            current_stage = "Test Automation"
             auto_agent = TestAutomationAgent(self.run_id, framework=automation_framework)
-            automation_scripts = self._execute_with_retry(
-                lambda: auto_agent.execute(
-                    test_cases,
-                    target_url=website_url,
-                    generation_mode=actual_mode
-                ),
-                stage_name="Test Automation"
+            automation_scripts = auto_agent.execute(
+                test_cases,
+                target_url=website_url,
+                generation_mode=actual_mode,
+                ai_model=actual_model_used,
+                alternative_models=alternative_models
             )
 
             # -------------------------------------------------------------
             # STAGE 5: Test Execution and Validation Agent
             # -------------------------------------------------------------
+            current_stage = "Test Execution"
             exec_agent = TestExecutionAgent(self.run_id, framework=automation_framework)
-            execution_results = exec_agent.execute(automation_scripts)
+            execution_results = exec_agent.execute(
+                automation_scripts,
+                generation_mode=actual_mode,
+                ai_model=actual_model_used,
+                alternative_models=alternative_models
+            )
 
             # -------------------------------------------------------------
             # STAGE 6: Reporting and Consolidation
             # -------------------------------------------------------------
+            current_stage = "Reporting & Analytics"
             total_tests = len(execution_results)
             passed_tests = sum(1 for r in execution_results if r.get("status") == "Passed")
             failed_tests = sum(1 for r in execution_results if r.get("status") == "Failed")
             skipped_tests = sum(1 for r in execution_results if r.get("status") == "Skipped")
             pass_percentage = round((passed_tests / total_tests * 100), 1) if total_tests > 0 else 0.0
 
-            mode_label = "AI-Powered Testing Mode" if actual_mode == "ai" else "Basic Testing Mode (Deterministic & Page Inspection Engine)"
+            if actual_mode == "gemini":
+                mode_label = f"Google Gemini API Mode ({actual_model_used})" if actual_model_used else "Google Gemini API Mode"
+            elif actual_mode == "openai":
+                mode_label = f"OpenAI API Mode ({actual_model_used})" if actual_model_used else "OpenAI API Mode"
+            else:
+                mode_label = "Basic Testing Mode (Deterministic & Page Inspection Engine)"
 
             summary_text = (
                 f"Multi-agent testing workflow completed in {mode_label} using {automation_framework.upper()}. "
@@ -124,6 +178,36 @@ class OrchestrationAgent:
             if fallback_reason:
                 summary_text += f" [Mode Notice: {fallback_reason}]"
 
+            # Optional AI Executive Report synthesis via Gemini
+            ai_quality_report = None
+            if actual_mode == "gemini" and actual_model_used:
+                try:
+                    rep_data, rep_meta = ai_service.generate_quality_report(
+                        metrics={
+                            "total_requirements": len(requirements),
+                            "total_scenarios": len(scenarios),
+                            "total_tests": total_tests,
+                            "passed_tests": passed_tests,
+                            "failed_tests": failed_tests,
+                            "pass_percentage": pass_percentage
+                        },
+                        execution_results=execution_results,
+                        mode=actual_mode,
+                        model_name=actual_model_used,
+                        alternative_models=alternative_models,
+                        run_id=self.run_id
+                    )
+                    if rep_data:
+                        ai_quality_report = rep_data
+                        if rep_data.get("executive_summary"):
+                            summary_text += f"\n\nExecutive Assessment: {rep_data['executive_summary']}"
+                except Exception as rep_err:
+                    logger.warning(f"[{self.run_id}] Stage 6: AI quality report synthesis warning: {rep_err}")
+
+            recommendations = self._generate_recommendations(failed_tests, pass_percentage, automation_framework, actual_mode)
+            if ai_quality_report and ai_quality_report.get("actionable_recommendations"):
+                recommendations.extend(ai_quality_report["actionable_recommendations"])
+
             report_data = {
                 "run_id": self.run_id,
                 "timestamp": datetime.now().isoformat(),
@@ -132,6 +216,10 @@ class OrchestrationAgent:
                 "jira_issue_id": jira_issue_id,
                 "automation_framework": automation_framework,
                 "generation_mode": actual_mode,
+                "ai_provider": actual_mode,
+                "ai_model": actual_model_used,
+                "selected_model": ai_model or "",
+                "actual_model": actual_model_used,
                 "mode_label": mode_label,
                 "mode_fallback_reason": fallback_reason,
                 "metrics": {
@@ -144,7 +232,8 @@ class OrchestrationAgent:
                     "pass_percentage": pass_percentage
                 },
                 "summary": summary_text,
-                "recommendations": self._generate_recommendations(failed_tests, pass_percentage, automation_framework, actual_mode),
+                "recommendations": recommendations,
+                "ai_quality_report": ai_quality_report,
                 "requirements": requirements,
                 "scenarios": scenarios,
                 "test_cases": test_cases,
@@ -166,18 +255,51 @@ class OrchestrationAgent:
                 passed=passed_tests,
                 failed=failed_tests,
                 skipped=skipped_tests,
-                pass_pct=pass_percentage
+                pass_pct=pass_percentage,
+                actual_model=actual_model_used,
+                retries_count=total_orchestrator_retries
             )
-            update_agent_status(self.run_id, self.agent_name, "COMPLETED", output_data=report_data)
+            update_agent_status(
+                self.run_id,
+                self.agent_name,
+                "COMPLETED",
+                output_data=report_data,
+                retries_count=total_orchestrator_retries,
+                selected_model=ai_model or "",
+                actual_model=actual_model_used
+            )
 
             logger.info(f"[{self.run_id}] Workflow completed successfully in {actual_mode.upper()} mode.")
             return report_data
 
         except Exception as e:
-            err_msg = f"Orchestrator encountered error: {str(e)}"
+            err_msg = f"Orchestrator failed during {current_stage}: {str(e)}"
+            error_cat = getattr(e, "error_category", "ExecutionError")
             logger.error(f"[{self.run_id}] {err_msg}")
-            update_run_status(self.run_id, "FAILED", error_message=err_msg)
-            update_agent_status(self.run_id, self.agent_name, "FAILED", error_message=err_msg)
+            
+            # Isolate failure: Record run status as FAILED while preserving previously saved outputs
+            update_run_status(
+                run_id=self.run_id,
+                status="FAILED",
+                error_message=err_msg,
+                total=len(execution_results),
+                passed=sum(1 for r in execution_results if r.get("status") == "Passed"),
+                failed=sum(1 for r in execution_results if r.get("status") == "Failed"),
+                skipped=sum(1 for r in execution_results if r.get("status") == "Skipped"),
+                pass_pct=0.0,
+                actual_model=actual_model_used,
+                retries_count=total_orchestrator_retries
+            )
+            update_agent_status(
+                self.run_id,
+                self.agent_name,
+                "FAILED",
+                error_message=err_msg,
+                retries_count=total_orchestrator_retries,
+                selected_model=ai_model or "",
+                actual_model=actual_model_used,
+                error_category=error_cat
+            )
             raise RuntimeError(err_msg)
 
     def _execute_with_retry(self, fn, stage_name: str, max_retries: int = 2):

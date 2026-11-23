@@ -140,12 +140,29 @@ def init_db():
     migrations = [
         ("testing_runs", "generation_mode", "TEXT DEFAULT 'ai'"),
         ("testing_runs", "mode_reason", "TEXT DEFAULT ''"),
+        ("testing_runs", "ai_provider", "TEXT DEFAULT 'basic'"),
+        ("testing_runs", "ai_model", "TEXT DEFAULT ''"),
         ("requirements", "generation_mode", "TEXT DEFAULT 'ai'"),
         ("requirements", "source", "TEXT DEFAULT 'AI-Powered'"),
+        ("requirements", "ai_provider", "TEXT DEFAULT 'basic'"),
+        ("requirements", "ai_model", "TEXT DEFAULT ''"),
         ("test_scenarios", "generation_mode", "TEXT DEFAULT 'ai'"),
         ("test_scenarios", "source", "TEXT DEFAULT 'AI-Powered'"),
+        ("test_scenarios", "ai_provider", "TEXT DEFAULT 'basic'"),
+        ("test_scenarios", "ai_model", "TEXT DEFAULT ''"),
         ("test_cases", "generation_mode", "TEXT DEFAULT 'ai'"),
         ("test_cases", "source", "TEXT DEFAULT 'AI-Powered'"),
+        ("test_cases", "ai_provider", "TEXT DEFAULT 'basic'"),
+        ("test_cases", "ai_model", "TEXT DEFAULT ''"),
+        ("agent_states", "retries_count", "INTEGER DEFAULT 0"),
+        ("agent_states", "selected_model", "TEXT DEFAULT ''"),
+        ("agent_states", "actual_model", "TEXT DEFAULT ''"),
+        ("agent_states", "models_attempted", "TEXT DEFAULT '[]'"),
+        ("agent_states", "error_category", "TEXT DEFAULT ''"),
+        ("testing_runs", "selected_model", "TEXT DEFAULT ''"),
+        ("testing_runs", "actual_model", "TEXT DEFAULT ''"),
+        ("testing_runs", "alternative_models", "TEXT DEFAULT '[]'"),
+        ("testing_runs", "retries_count", "INTEGER DEFAULT 0"),
     ]
     for tbl, col, col_def in migrations:
         try:
@@ -166,21 +183,28 @@ def create_testing_run(
     manual_requirements: str,
     automation_framework: str = "playwright",
     generation_mode: str = "auto",
-    mode_reason: str = ""
+    mode_reason: str = "",
+    ai_provider: str = "basic",
+    ai_model: str = "",
+    alternative_models: Optional[List[str]] = None
 ):
     conn = get_connection()
     cursor = conn.cursor()
     now = datetime.now().isoformat()
+    alt_json = json.dumps(alternative_models or [])
     cursor.execute("""
         INSERT INTO testing_runs (
             run_id, created_at, status, website_url, jira_project,
             jira_issue_id, manual_requirements, automation_framework,
-            generation_mode, mode_reason
+            generation_mode, mode_reason, ai_provider, ai_model,
+            selected_model, actual_model, alternative_models, retries_count
         )
-        VALUES (?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
     """, (
         run_id, now, website_url, jira_project, jira_issue_id,
-        manual_requirements, automation_framework, generation_mode, mode_reason
+        manual_requirements, automation_framework, generation_mode, mode_reason,
+        ai_provider, ai_model,
+        ai_model, ai_model, alt_json
     ))
 
     # Initialize 6 agents
@@ -194,31 +218,58 @@ def create_testing_run(
     ]
     for agent_name, display_name, step_order in agents:
         cursor.execute("""
-            INSERT INTO agent_states (run_id, agent_name, display_name, step_order, status)
-            VALUES (?, ?, ?, ?, 'PENDING')
-        """, (run_id, agent_name, display_name, step_order))
+            INSERT INTO agent_states (run_id, agent_name, display_name, step_order, status, selected_model, actual_model)
+            VALUES (?, ?, ?, ?, 'PENDING', ?, ?)
+        """, (run_id, agent_name, display_name, step_order, ai_model, ai_model))
 
     conn.commit()
     conn.close()
 
-def update_run_mode(run_id: str, generation_mode: str, mode_reason: str = ""):
+def update_run_mode(run_id: str, generation_mode: str, mode_reason: str = "",
+                    ai_provider: Optional[str] = None, ai_model: Optional[str] = None):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE testing_runs
-        SET generation_mode = ?, mode_reason = ?
-        WHERE run_id = ?
-    """, (generation_mode, mode_reason, run_id))
+    if ai_provider is not None and ai_model is not None:
+        cursor.execute("""
+            UPDATE testing_runs
+            SET generation_mode = ?, mode_reason = ?, ai_provider = ?, ai_model = ?,
+                selected_model = COALESCE(NULLIF(selected_model, ''), ?),
+                actual_model = ?
+            WHERE run_id = ?
+        """, (generation_mode, mode_reason, ai_provider, ai_model, ai_model, ai_model, run_id))
+    elif ai_provider is not None:
+        cursor.execute("""
+            UPDATE testing_runs
+            SET generation_mode = ?, mode_reason = ?, ai_provider = ?
+            WHERE run_id = ?
+        """, (generation_mode, mode_reason, ai_provider, run_id))
+    else:
+        cursor.execute("""
+            UPDATE testing_runs
+            SET generation_mode = ?, mode_reason = ?
+            WHERE run_id = ?
+        """, (generation_mode, mode_reason, run_id))
     conn.commit()
     conn.close()
 
-def update_agent_status(run_id: str, agent_name: str, status: str,
-                        output_data: Optional[Any] = None, error_message: Optional[str] = None):
+def update_agent_status(
+    run_id: str,
+    agent_name: str,
+    status: str,
+    output_data: Optional[Any] = None,
+    error_message: Optional[str] = None,
+    retries_count: int = 0,
+    selected_model: Optional[str] = None,
+    actual_model: Optional[str] = None,
+    models_attempted: Optional[List[str]] = None,
+    error_category: Optional[str] = None
+):
     conn = get_connection()
     cursor = conn.cursor()
     now = datetime.now().isoformat()
 
     output_json = json.dumps(output_data, default=str) if output_data is not None else None
+    attempted_json = json.dumps(models_attempted or []) if models_attempted is not None else None
 
     if status == "RUNNING":
         cursor.execute("""
@@ -229,9 +280,23 @@ def update_agent_status(run_id: str, agent_name: str, status: str,
     elif status in ["COMPLETED", "FAILED"]:
         cursor.execute("""
             UPDATE agent_states
-            SET status = ?, completed_at = ?, output_json = COALESCE(?, output_json), error_message = ?
+            SET status = ?,
+                completed_at = ?,
+                output_json = COALESCE(?, output_json),
+                error_message = ?,
+                retries_count = CASE WHEN ? > 0 THEN ? ELSE retries_count END,
+                selected_model = COALESCE(?, selected_model),
+                actual_model = COALESCE(?, actual_model),
+                models_attempted = COALESCE(?, models_attempted),
+                error_category = COALESCE(?, error_category)
             WHERE run_id = ? AND agent_name = ?
-        """, (status, now, output_json, error_message, run_id, agent_name))
+        """, (
+            status, now, output_json, error_message,
+            retries_count, retries_count,
+            selected_model, actual_model,
+            attempted_json, error_category,
+            run_id, agent_name
+        ))
 
     conn.commit()
     conn.close()
@@ -239,30 +304,37 @@ def update_agent_status(run_id: str, agent_name: str, status: str,
 def update_run_status(run_id: str, status: str, summary: Optional[str] = None,
                       error_message: Optional[str] = None,
                       total: int = 0, passed: int = 0, failed: int = 0, skipped: int = 0,
-                      pass_pct: float = 0.0):
+                      pass_pct: float = 0.0,
+                      actual_model: Optional[str] = None,
+                      retries_count: int = 0):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
         UPDATE testing_runs
         SET status = ?, summary = COALESCE(?, summary), error_message = ?,
             total_tests = ?, passed_tests = ?, failed_tests = ?, skipped_tests = ?,
-            pass_percentage = ?
+            pass_percentage = ?,
+            actual_model = COALESCE(?, actual_model),
+            retries_count = CASE WHEN ? > 0 THEN ? ELSE retries_count END
         WHERE run_id = ?
-    """, (status, summary, error_message, total, passed, failed, skipped, pass_pct, run_id))
+    """, (status, summary, error_message, total, passed, failed, skipped, pass_pct, actual_model, retries_count, retries_count, run_id))
     conn.commit()
     conn.close()
 
-def save_requirements(run_id: str, requirements: List[Dict[str, Any]], generation_mode: str = "ai"):
+def save_requirements(run_id: str, requirements: List[Dict[str, Any]], generation_mode: str = "ai",
+                      ai_provider: str = "basic", ai_model: str = ""):
     conn = get_connection()
     cursor = conn.cursor()
     for req in requirements:
+        prov = req.get("ai_provider") or ai_provider
+        mdl = req.get("ai_model") or ai_model
         cursor.execute("""
             INSERT INTO requirements (
                 run_id, req_id, description, acceptance_criteria,
                 business_rules, testable_conditions, missing_information, priority,
-                generation_mode, source
+                generation_mode, source, ai_provider, ai_model
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             run_id,
             req.get("req_id", "REQ-01"),
@@ -273,22 +345,27 @@ def save_requirements(run_id: str, requirements: List[Dict[str, Any]], generatio
             json.dumps(req.get("missing_information", [])),
             req.get("priority", "Medium"),
             req.get("generation_mode", generation_mode),
-            req.get("source", "Basic Inspection Engine" if generation_mode == "basic" else "AI-Powered")
+            req.get("source", "Basic Inspection Engine" if generation_mode == "basic" else f"{prov.upper()} ({mdl})"),
+            prov,
+            mdl
         ))
     conn.commit()
     conn.close()
 
-def save_scenarios(run_id: str, scenarios: List[Dict[str, Any]], generation_mode: str = "ai"):
+def save_scenarios(run_id: str, scenarios: List[Dict[str, Any]], generation_mode: str = "ai",
+                   ai_provider: str = "basic", ai_model: str = ""):
     conn = get_connection()
     cursor = conn.cursor()
     for sc in scenarios:
+        prov = sc.get("ai_provider") or ai_provider
+        mdl = sc.get("ai_model") or ai_model
         cursor.execute("""
             INSERT INTO test_scenarios (
                 run_id, scenario_id, req_id, title, description,
                 scenario_type, priority, expected_behavior,
-                generation_mode, source
+                generation_mode, source, ai_provider, ai_model
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             run_id,
             sc.get("scenario_id", "SC-01"),
@@ -299,23 +376,28 @@ def save_scenarios(run_id: str, scenarios: List[Dict[str, Any]], generation_mode
             sc.get("priority", "Medium"),
             sc.get("expected_behavior", ""),
             sc.get("generation_mode", generation_mode),
-            sc.get("source", "Basic Scenario Engine" if generation_mode == "basic" else "AI-Powered")
+            sc.get("source", "Basic Scenario Engine" if generation_mode == "basic" else f"{prov.upper()} ({mdl})"),
+            prov,
+            mdl
         ))
     conn.commit()
     conn.close()
 
-def save_test_cases(run_id: str, test_cases: List[Dict[str, Any]], framework: str = "playwright", generation_mode: str = "ai"):
+def save_test_cases(run_id: str, test_cases: List[Dict[str, Any]], framework: str = "playwright",
+                    generation_mode: str = "ai", ai_provider: str = "basic", ai_model: str = ""):
     conn = get_connection()
     cursor = conn.cursor()
     for tc in test_cases:
+        prov = tc.get("ai_provider") or ai_provider
+        mdl = tc.get("ai_model") or ai_model
         cursor.execute("""
             INSERT INTO test_cases (
                 run_id, case_id, scenario_id, title, preconditions,
                 test_data, execution_steps, expected_result, priority,
                 status, framework, script_path, code_snippet,
-                generation_mode, source
+                generation_mode, source, ai_provider, ai_model
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Not Executed', ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Not Executed', ?, ?, ?, ?, ?, ?, ?)
         """, (
             run_id,
             tc.get("case_id", "TC-01"),
@@ -330,7 +412,9 @@ def save_test_cases(run_id: str, test_cases: List[Dict[str, Any]], framework: st
             tc.get("script_path", ""),
             tc.get("code_snippet", ""),
             tc.get("generation_mode", generation_mode),
-            tc.get("source", "Basic Test Case Engine" if generation_mode == "basic" else "AI-Powered")
+            tc.get("source", "Basic Test Case Engine" if generation_mode == "basic" else f"{prov.upper()} ({mdl})"),
+            prov,
+            mdl
         ))
     conn.commit()
     conn.close()

@@ -72,7 +72,7 @@ export default function App() {
         setCurrentPage={setCurrentPage}
         activeRunId={activeRunId}
         selectedFramework={activeRunData?.automation_framework || settings?.default_automation_framework}
-        generationMode={activeRunData?.generation_mode || (settings?.openai_configured ? 'ai' : 'basic')}
+        generationMode={activeRunData?.ai_provider || activeRunData?.generation_mode || (settings?.gemini_configured ? 'gemini' : settings?.openai_configured ? 'openai' : 'basic')}
         collapsed={collapsed}
         setCollapsed={setCollapsed}
       />

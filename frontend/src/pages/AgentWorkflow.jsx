@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import Logo from '../assets/branding/Logo';
 import {
   BrainCircuit,
   CheckCircle2,
@@ -62,7 +63,11 @@ export default function AgentWorkflow({ activeRunId, runData, onNavigatePage }) 
     return () => clearInterval(interval);
   }, [activeRunId, polling]);
 
-  const isBasicMode = runData?.generation_mode === 'basic';
+  const provider = runData?.ai_provider || runData?.generation_mode || 'basic';
+  const isGemini = provider === 'gemini';
+  const isAi = provider === 'openai' || provider === 'ai';
+  const isBasicMode = !isGemini && !isAi;
+  const modelName = runData?.ai_model;
   const framework = runData?.automation_framework?.toUpperCase() || 'PLAYWRIGHT';
 
   const agentMeta = {
@@ -74,7 +79,9 @@ export default function AgentWorkflow({ activeRunId, runData, onNavigatePage }) 
       color: 'blue',
       taskDescription: isBasicMode
         ? 'Inspects website DOM controls (forms, links, buttons, inputs) and builds structured requirements.'
-        : 'Connects to Jira MCP / extracts user stories and acceptance criteria via OpenAI reasoning.',
+        : isGemini
+        ? `Connects to Jira MCP / extracts user stories and acceptance criteria via Gemini reasoning (${modelName || 'Selected Model'}).`
+        : `Connects to Jira MCP / extracts user stories and acceptance criteria via OpenAI reasoning (${modelName || 'Selected Model'}).`,
       page: 'requirements',
       pageLabel: 'View Requirements'
     },
@@ -147,12 +154,28 @@ export default function AgentWorkflow({ activeRunId, runData, onNavigatePage }) 
           <div className="flex items-center gap-2.5 flex-wrap">
             <h1 className="text-2xl font-bold text-surface-900 tracking-tight">Agent Command Center</h1>
             <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-mono font-semibold border ${
-              isBasicMode
-                ? 'bg-amber-50 text-amber-800 border-amber-200'
-                : 'bg-purple-50 text-purple-800 border-purple-200'
+              isGemini
+                ? 'bg-blue-50 text-blue-800 border-blue-200'
+                : isAi
+                ? 'bg-purple-50 text-purple-800 border-purple-200'
+                : 'bg-amber-50 text-amber-800 border-amber-200'
             }`}>
-              {isBasicMode ? <Zap className="w-3 h-3 text-amber-600" /> : <Bot className="w-3 h-3 text-purple-600" />}
-              <span>{isBasicMode ? 'BASIC TESTING MODE' : 'AI-POWERED MODE'}</span>
+              {isGemini ? (
+                <>
+                  <Sparkles className="w-3 h-3 text-blue-600" />
+                  <span>GEMINI{modelName ? ` — ${modelName}` : ''}</span>
+                </>
+              ) : isAi ? (
+                <>
+                  <Bot className="w-3 h-3 text-purple-600" />
+                  <span>OPENAI{modelName ? ` — ${modelName}` : ''}</span>
+                </>
+              ) : (
+                <>
+                  <Zap className="w-3 h-3 text-amber-600" />
+                  <span>BASIC TESTING MODE</span>
+                </>
+              )}
             </span>
             <span className="px-2.5 py-0.5 rounded-full text-[11px] font-mono font-semibold bg-blue-50 text-blue-700 border border-blue-200">
               {framework}
@@ -203,8 +226,8 @@ export default function AgentWorkflow({ activeRunId, runData, onNavigatePage }) 
         {/* Orchestrator Master Header Bar */}
         <div className="bg-white/95 backdrop-blur-xs border border-surface-200 rounded-xl p-4 mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-2xs">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-sm">
-              <BrainCircuit className="w-5 h-5" />
+            <div className="shrink-0">
+              <Logo variant="icon" size={42} />
             </div>
             <div>
               <div className="flex items-center gap-2">
@@ -327,6 +350,27 @@ export default function AgentWorkflow({ activeRunId, runData, onNavigatePage }) 
                   <p className="text-[11px] text-surface-500 mt-1.5 line-clamp-3 leading-relaxed">
                     {meta.taskDescription}
                   </p>
+
+                  {/* Reliability & Failover Metadata Badges */}
+                  {(agent.retries_count > 0 || (agent.actual_model && agent.actual_model !== agent.selected_model) || agent.error_category) && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {agent.retries_count > 0 && (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                          {agent.retries_count} {agent.retries_count === 1 ? 'retry' : 'retries'}
+                        </span>
+                      )}
+                      {agent.actual_model && agent.actual_model !== agent.selected_model && (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-blue-50 text-blue-700 border border-blue-200" title={`Failover from ${agent.selected_model} to ${agent.actual_model}`}>
+                          Alt: {agent.actual_model}
+                        </span>
+                      )}
+                      {agent.error_category && agent.status === 'FAILED' && (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                          {agent.error_category}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Card Footer: Timestamp & Inspect Indicator */}
@@ -441,9 +485,38 @@ export default function AgentWorkflow({ activeRunId, runData, onNavigatePage }) 
             {activeTab === 'output' && (
               <div>
                 {selectedAgent.error_message ? (
-                  <div className="p-4 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs">
-                    <strong className="block font-bold text-rose-900 mb-1">Execution Failure:</strong>
-                    {selectedAgent.error_message}
+                  <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                        <span className="font-bold text-rose-900 text-sm">
+                          Execution Blocked — Failure Isolated
+                        </span>
+                      </div>
+                      {selectedAgent.error_category && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-100 text-rose-800 border border-rose-300">
+                          {selectedAgent.error_category}
+                        </span>
+                      )}
+                    </div>
+                    <p className="font-mono text-[11px] bg-white/70 p-2.5 rounded-lg border border-rose-200 break-words leading-relaxed">
+                      {selectedAgent.error_message}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-3 pt-1 text-[11px] text-rose-700">
+                      {selectedAgent.retries_count > 0 && (
+                        <span>Retries Attempted: <strong>{selectedAgent.retries_count}</strong></span>
+                      )}
+                      {selectedAgent.selected_model && (
+                        <span>Primary Model: <strong>{selectedAgent.selected_model}</strong></span>
+                      )}
+                      {selectedAgent.actual_model && selectedAgent.actual_model !== selectedAgent.selected_model && (
+                        <span>Alternative Failover: <strong>{selectedAgent.actual_model}</strong></span>
+                      )}
+                    </div>
+                    <div className="pt-2 border-t border-rose-200/80 text-[11px] text-rose-600 flex items-center gap-1.5 font-medium">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span>Failure was safely isolated. Preceding agent artifacts remain fully preserved in database.</span>
+                    </div>
                   </div>
                 ) : selectedAgent.output_data ? (
                   <div className="relative">
@@ -482,10 +555,33 @@ export default function AgentWorkflow({ activeRunId, runData, onNavigatePage }) 
                 </div>
 
                 <div className="p-4 rounded-xl bg-surface-50 border border-surface-200 space-y-2.5">
-                  <span className="font-bold text-surface-700 block uppercase font-mono text-[10px]">Intelligence & Architecture</span>
+                  <span className="font-bold text-surface-700 block uppercase font-mono text-[10px]">Intelligence &amp; Model Reliability</span>
                   <div className="flex justify-between py-1 border-b border-surface-200/60">
-                    <span className="text-surface-500">Intelligence Mode:</span>
-                    <span className="font-mono text-surface-800 font-medium">{isBasicMode ? 'Basic Mode (Rule-based)' : 'AI Mode (OpenAI)'}</span>
+                    <span className="text-surface-500">Provider:</span>
+                    <span className="font-mono text-surface-800 font-bold uppercase">{provider}</span>
+                  </div>
+                  {selectedAgent.selected_model && (
+                    <div className="flex justify-between py-1 border-b border-surface-200/60">
+                      <span className="text-surface-500">Selected Primary Model:</span>
+                      <span className="font-mono text-surface-800 font-medium">{selectedAgent.selected_model}</span>
+                    </div>
+                  )}
+                  {selectedAgent.actual_model && (
+                    <div className="flex justify-between py-1 border-b border-surface-200/60">
+                      <span className="text-surface-500">Actual Model Used:</span>
+                      <span className={`font-mono font-bold ${
+                        selectedAgent.actual_model !== selectedAgent.selected_model
+                          ? 'text-blue-600'
+                          : 'text-surface-800'
+                      }`}>
+                        {selectedAgent.actual_model}
+                        {selectedAgent.actual_model !== selectedAgent.selected_model && ' (Failover)'}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex justify-between py-1 border-b border-surface-200/60">
+                    <span className="text-surface-500">Total Retries:</span>
+                    <span className="font-mono text-surface-800 font-bold">{selectedAgent.retries_count || 0}</span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-surface-200/60">
                     <span className="text-surface-500">Target Framework:</span>

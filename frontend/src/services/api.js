@@ -58,10 +58,30 @@ export const api = {
     return fetchJSON(`/jira/issues${qs}`);
   },
 
+  // AI Provider & Dynamic Model Discovery
+  getAiProviders: () => fetchJSON('/ai/providers'),
+
+  getProviderModels: (provider, refresh = false) =>
+    fetchJSON(`/ai/models/${encodeURIComponent(provider || '')}?refresh=${Boolean(refresh)}`),
+
+  validateModel: (provider, modelId) =>
+    fetchJSON(`/ai/validate/${encodeURIComponent(provider || '')}`, {
+      method: 'POST',
+      body: JSON.stringify({ model_id: modelId }),
+    }),
+
+  getAiConfiguration: () => fetchJSON('/ai/configuration/status'),
+
   // Settings & System
   getSettings: () => fetchJSON('/settings'),
 
-  testOpenAI: () => fetchJSON('/settings/test-ai', { method: 'POST' }),
+  testProviderConnection: (provider) =>
+    fetchJSON(`/settings/test-provider?provider=${encodeURIComponent(provider || '')}`, {
+      method: 'POST',
+    }),
+
+  testOpenAI: () =>
+    fetchJSON('/settings/test-provider?provider=openai', { method: 'POST' }),
 
   updateSettings: (payload) =>
     fetchJSON('/settings', {

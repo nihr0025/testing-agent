@@ -1,5 +1,6 @@
 import uuid
 import logging
+from typing import Optional, List
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from backend.models.schemas import StartRunRequest, DashboardMetrics
 from backend.database.db import (
@@ -27,7 +28,9 @@ def run_orchestrator_background(
     jira_project: str,
     jira_issue_id: str,
     framework: str,
-    generation_mode: str
+    generation_mode: str,
+    ai_model: str = "",
+    alternative_models: Optional[List[str]] = None
 ):
     try:
         orchestrator = OrchestrationAgent(run_id)
@@ -37,7 +40,9 @@ def run_orchestrator_background(
             jira_project=jira_project,
             jira_issue_id=jira_issue_id,
             automation_framework=framework,
-            generation_mode=generation_mode
+            generation_mode=generation_mode,
+            ai_model=ai_model,
+            alternative_models=alternative_models or []
         )
     except Exception as e:
         logger.error(f"Background execution failed for {run_id}: {e}")
@@ -49,26 +54,45 @@ def start_testing_run(req: StartRunRequest, background_tasks: BackgroundTasks):
     jira_issue = (req.jira_issue_id or "").strip()
     manual_req = (req.manual_requirements or "").strip()
     framework = (req.automation_framework or config.DEFAULT_AUTOMATION_FRAMEWORK).lower()
-    gen_mode = (req.generation_mode or "auto").lower().strip()
+
+    # Determine requested provider / mode
+    provider_req = (req.ai_provider or req.generation_mode or config.DEFAULT_TESTING_MODE or "basic").lower().strip()
+    if provider_req not in ["basic", "gemini", "openai"]:
+        provider_req = "basic"
+
+    chosen_model = (req.ai_model or "").strip()
+    actual_mode = provider_req
+    mode_reason = ""
+
+    # Strict model selection and credential enforcement (No silent fallback)
+    if provider_req == "gemini":
+        if not config.is_gemini_configured():
+            raise HTTPException(
+                status_code=400,
+                detail="GEMINI_API_KEY (or GOOGLE_API_KEY) is not configured in backend .env. Please add GEMINI_API_KEY to your .env file or choose Basic Mode."
+            )
+        if not chosen_model:
+            raise HTTPException(
+                status_code=400,
+                detail="No Gemini model was selected. Please select a dynamically discovered model from the dropdown before launching the run."
+            )
+    elif provider_req == "openai":
+        if not config.is_openai_configured():
+            raise HTTPException(
+                status_code=400,
+                detail="OPENAI_API_KEY is not configured in backend .env. Please add OPENAI_API_KEY to your .env file or choose Basic Mode."
+            )
+        if not chosen_model:
+            raise HTTPException(
+                status_code=400,
+                detail="No OpenAI model was selected. Please select a dynamically discovered model from the dropdown before launching the run."
+            )
+    else:
+        actual_mode = "basic"
+        chosen_model = ""
 
     if framework not in ["playwright", "selenium"]:
         framework = "playwright"
-
-    if gen_mode not in ["ai", "basic", "auto"]:
-        gen_mode = "auto"
-
-    # Resolve mode if auto
-    initial_mode = gen_mode
-    mode_reason = ""
-    if gen_mode == "auto":
-        if config.is_openai_configured():
-            initial_mode = "ai"
-        else:
-            initial_mode = "basic"
-            mode_reason = "OPENAI_API_KEY not configured. Auto-selected Basic Testing Mode."
-    elif gen_mode == "ai" and not config.is_openai_configured():
-        initial_mode = "basic"
-        mode_reason = "AI Mode requested but OPENAI_API_KEY is not configured. Automatically fell back to Basic Mode."
 
     # Input validation: At least one input source must be provided
     if not url and not jira_issue and not manual_req:
@@ -84,6 +108,7 @@ def start_testing_run(req: StartRunRequest, background_tasks: BackgroundTasks):
             raise HTTPException(status_code=400, detail=msg)
 
     run_id = f"RUN-{uuid.uuid4().hex[:8].upper()}"
+    alt_models = [m.strip() for m in (req.alternative_models or []) if m and m.strip()]
 
     # Initialize testing run & 6 agent records in database
     create_testing_run(
@@ -93,8 +118,11 @@ def start_testing_run(req: StartRunRequest, background_tasks: BackgroundTasks):
         jira_issue_id=jira_issue,
         manual_requirements=manual_req,
         automation_framework=framework,
-        generation_mode=initial_mode,
-        mode_reason=mode_reason
+        generation_mode=actual_mode,
+        mode_reason=mode_reason,
+        ai_provider=actual_mode,
+        ai_model=chosen_model,
+        alternative_models=alt_models
     )
 
     # Launch multi-agent workflow
@@ -106,16 +134,20 @@ def start_testing_run(req: StartRunRequest, background_tasks: BackgroundTasks):
         jira_proj,
         jira_issue,
         framework,
-        initial_mode
+        actual_mode,
+        chosen_model,
+        alt_models
     )
 
     return {
         "run_id": run_id,
         "status": "PENDING",
         "automation_framework": framework,
-        "generation_mode": initial_mode,
+        "generation_mode": actual_mode,
+        "ai_provider": actual_mode,
+        "ai_model": chosen_model,
         "mode_reason": mode_reason,
-        "message": f"Testing run initiated with 6 agents using {framework.upper()} in {initial_mode.upper()} mode."
+        "message": f"Testing run initiated with 6 agents using {framework.upper()} in {actual_mode.upper()} mode."
     }
 
 @router.get("/runs")

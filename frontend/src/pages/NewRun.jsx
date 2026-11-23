@@ -8,15 +8,16 @@ import {
   Sparkles,
   Zap,
   CheckCircle2,
-  ExternalLink,
   ShieldCheck,
   Bot,
   ArrowRight,
   ArrowLeft,
   Settings,
-  Layers,
   Code2,
-  Check
+  Check,
+  RefreshCw,
+  AlertTriangle,
+  HelpCircle
 } from 'lucide-react';
 import { api } from '../services/api';
 
@@ -27,13 +28,59 @@ export default function NewRun({ onRunStarted, defaultFramework = 'playwright' }
   const [jiraIssueId, setJiraIssueId] = useState('');
   const [manualRequirements, setManualRequirements] = useState('');
   const [framework, setFramework] = useState(defaultFramework);
-  const [mode, setMode] = useState('basic'); // 'basic' or 'ai'
+
+  // Intelligence provider: 'basic', 'gemini', 'openai'
+  const [provider, setProvider] = useState('basic');
+  const [selectedModel, setSelectedModel] = useState('');
+  const [alternativeModels, setAlternativeModels] = useState([]);
+
   const [headless, setHeadless] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [jiraIssues, setJiraIssues] = useState([]);
   const [showJiraPicker, setShowJiraPicker] = useState(false);
   const [settings, setSettings] = useState(null);
+
+  // Dynamic models per provider
+  const [geminiModels, setGeminiModels] = useState([]);
+  const [openaiModels, setOpenaiModels] = useState([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [discoveryError, setDiscoveryError] = useState(null);
+
+  // Validation probe testing for selected model
+  const [validatingModel, setValidatingModel] = useState(false);
+  const [validationResult, setValidationResult] = useState(null);
+
+  // Connection testing for provider credentials
+  const [verifyingConn, setVerifyingConn] = useState(false);
+  const [verifyResult, setVerifyResult] = useState(null);
+
+  const fetchModelsForProvider = async (prov, forceRefresh = false) => {
+    if (prov === 'basic') {
+      setDiscoveryError(null);
+      return;
+    }
+
+    setModelsLoading(true);
+    setDiscoveryError(null);
+    try {
+      const res = await api.getProviderModels(prov, forceRefresh);
+      const list = Array.isArray(res) ? res : res?.models || [];
+      if (res?.error) {
+        setDiscoveryError(res.error);
+      }
+
+      if (prov === 'gemini') {
+        setGeminiModels(list);
+      } else if (prov === 'openai') {
+        setOpenaiModels(list);
+      }
+    } catch (err) {
+      setDiscoveryError(err.message || `Failed to dynamically discover models for ${prov}`);
+    } finally {
+      setModelsLoading(false);
+    }
+  };
 
   useEffect(() => {
     api.getJiraIssues()
@@ -43,21 +90,72 @@ export default function NewRun({ onRunStarted, defaultFramework = 'playwright' }
     api.getSettings()
       .then((s) => {
         setSettings(s);
-        if (s?.openai_configured) {
-          setMode('ai');
+        // Initial provider preference
+        if (s?.gemini_configured) {
+          setProvider('gemini');
+        } else if (s?.openai_configured) {
+          setProvider('openai');
         } else {
-          setMode('basic');
+          setProvider('basic');
         }
       })
       .catch(() => {});
   }, []);
 
+  // When provider changes, fetch its models dynamically and reset model selection
+  useEffect(() => {
+    setVerifyResult(null);
+    setValidationResult(null);
+    setSelectedModel('');
+    setAlternativeModels([]);
+    if (provider !== 'basic') {
+      fetchModelsForProvider(provider, false);
+    }
+  }, [provider]);
+
   const fillDemoUrl = () => {
     setWebsiteUrl('http://127.0.0.1:8000/demo');
-    setManualRequirements('Verify navigation, search functionality, and login error handling on Acme Demo Shop.');
+    setManualRequirements('Verify catalog rendering, search filter, and login modal validations on Acme Demo Shop.');
   };
 
-  const isAiConfigured = settings?.openai_configured;
+  const handleTestConnection = async (prov) => {
+    setVerifyingConn(true);
+    setVerifyResult(null);
+    try {
+      const res = await api.testProviderConnection(prov);
+      setVerifyResult(res);
+    } catch (err) {
+      setVerifyResult({
+        valid: false,
+        error_type: 'NetworkError',
+        message: err.message || 'Validation request failed',
+      });
+    } finally {
+      setVerifyingConn(false);
+    }
+  };
+
+  const handleValidateSelectedModel = async () => {
+    if (!selectedModel) {
+      setError('Please select a model from the dropdown first.');
+      return;
+    }
+    setValidatingModel(true);
+    setValidationResult(null);
+    setError('');
+    try {
+      const res = await api.validateModel(provider, selectedModel);
+      setValidationResult(res);
+    } catch (err) {
+      setValidationResult({
+        valid: false,
+        error_type: 'ValidationError',
+        message: err.message || 'Model validation probe failed',
+      });
+    } finally {
+      setValidatingModel(false);
+    }
+  };
 
   const validateStep1 = () => {
     const url = websiteUrl.trim();
@@ -71,11 +169,23 @@ export default function NewRun({ onRunStarted, defaultFramework = 'playwright' }
     return true;
   };
 
+  const validateStep2 = () => {
+    if (provider !== 'basic') {
+      if (!selectedModel || !selectedModel.trim()) {
+        setError(`Please select an AI model for ${provider === 'gemini' ? 'Google Gemini' : 'OpenAI'} before proceeding.`);
+        return false;
+      }
+    }
+    setError('');
+    return true;
+  };
+
   const handleNext = () => {
     if (step === 1) {
       if (!validateStep1()) return;
       setStep(2);
     } else if (step === 2) {
+      if (!validateStep2()) return;
       setStep(3);
     }
   };
@@ -91,6 +201,10 @@ export default function NewRun({ onRunStarted, defaultFramework = 'playwright' }
       setStep(1);
       return;
     }
+    if (!validateStep2()) {
+      setStep(2);
+      return;
+    }
 
     setLoading(true);
     setError('');
@@ -101,7 +215,10 @@ export default function NewRun({ onRunStarted, defaultFramework = 'playwright' }
         jira_issue_id: jiraIssueId.trim(),
         manual_requirements: manualRequirements.trim(),
         automation_framework: framework,
-        generation_mode: mode,
+        generation_mode: provider,
+        ai_provider: provider,
+        ai_model: provider === 'basic' ? undefined : selectedModel.trim(),
+        alternative_models: provider === 'gemini' ? alternativeModels : [],
       });
 
       if (res?.run_id) {
@@ -113,13 +230,17 @@ export default function NewRun({ onRunStarted, defaultFramework = 'playwright' }
     }
   };
 
+  const isGeminiConfigured = settings?.gemini_configured;
+  const isOpenAiConfigured = settings?.openai_configured;
+  const currentModelList = provider === 'gemini' ? geminiModels : openaiModels;
+
   return (
     <div className="p-6 md:p-8 max-w-4xl mx-auto space-y-6">
       {/* Page Title */}
       <div>
         <h1 className="text-2xl font-bold text-surface-900 tracking-tight">New Testing Run</h1>
         <p className="text-xs text-surface-500 mt-1">
-          Configure test target, intelligence mode, and execution framework for the multi-agent QA fleet.
+          Configure test target, AI intelligence engine, and execution framework for the 6-agent QA fleet.
         </p>
       </div>
 
@@ -144,7 +265,7 @@ export default function NewRun({ onRunStarted, defaultFramework = 'playwright' }
             </div>
             <div className="text-left truncate">
               <div className="text-xs font-bold leading-tight">Target</div>
-              <div className="text-[10px] text-surface-400 truncate">URL, Jira, or Story</div>
+              <div className="text-[10px] text-surface-400 truncate">URL, Jira, or Reqs</div>
             </div>
           </div>
 
@@ -168,14 +289,14 @@ export default function NewRun({ onRunStarted, defaultFramework = 'playwright' }
             </div>
             <div className="text-left truncate">
               <div className="text-xs font-bold leading-tight">Configuration</div>
-              <div className="text-[10px] text-surface-400 truncate">AI Mode & Engine</div>
+              <div className="text-[10px] text-surface-400 truncate">Provider, Model &amp; Engine</div>
             </div>
           </div>
 
           {/* Step 3 Pill */}
           <div
             onClick={() => {
-              if (validateStep1()) setStep(3);
+              if (validateStep1() && validateStep2()) setStep(3);
             }}
             className={`flex items-center gap-2.5 p-2 rounded-lg cursor-pointer transition-all ${
               step === 3
@@ -189,8 +310,8 @@ export default function NewRun({ onRunStarted, defaultFramework = 'playwright' }
               3
             </div>
             <div className="text-left truncate">
-              <div className="text-xs font-bold leading-tight">Review & Launch</div>
-              <div className="text-[10px] text-surface-400 truncate">Summary & Start</div>
+              <div className="text-xs font-bold leading-tight">Review &amp; Launch</div>
+              <div className="text-[10px] text-surface-400 truncate">Summary &amp; Execute</div>
             </div>
           </div>
         </div>
@@ -308,7 +429,7 @@ export default function NewRun({ onRunStarted, defaultFramework = 'playwright' }
           <div className="bg-white border border-surface-200 rounded-xl p-5 shadow-2xs space-y-3">
             <label className="text-xs font-bold text-surface-900 uppercase font-mono tracking-wider flex items-center gap-2">
               <FileText className="w-4 h-4 text-emerald-600" />
-              Manual Requirements & Custom Testing Objectives
+              Manual Requirements &amp; Custom Testing Objectives
             </label>
             <textarea
               rows={3}
@@ -335,79 +456,265 @@ export default function NewRun({ onRunStarted, defaultFramework = 'playwright' }
 
       {/* STEP 2: CONFIGURATION */}
       {step === 2 && (
-        <div className="space-y-4">
-          {/* Intelligence Mode */}
-          <div className="bg-white border border-surface-200 rounded-xl p-5 shadow-2xs space-y-3">
+        <div className="space-y-5">
+          {/* Intelligence Provider Selection */}
+          <div className="bg-white border border-surface-200 rounded-xl p-5 shadow-2xs space-y-4">
             <div className="flex items-center justify-between">
               <div>
                 <label className="text-xs font-bold text-surface-900 uppercase font-mono tracking-wider flex items-center gap-2">
                   <Bot className="w-4 h-4 text-blue-600" />
-                  Testing Intelligence Mode
+                  Testing Intelligence Provider
                 </label>
-                <p className="text-[11px] text-surface-500 mt-0.5">Select how the 6 agents will formulate and analyze test suites</p>
+                <p className="text-[11px] text-surface-500 mt-0.5">
+                  Select Basic Mode for offline testing, or an AI provider with authenticated dynamic model discovery
+                </p>
               </div>
-              <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
-                mode === 'ai' ? 'bg-purple-50 text-purple-700 border-purple-200' : 'bg-amber-50 text-amber-700 border-amber-200'
-              }`}>
-                {mode.toUpperCase()} MODE
+              <span className="px-2.5 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-50 text-blue-700 border border-blue-200 uppercase">
+                {provider === 'basic' ? 'BASIC MODE' : selectedModel ? `${provider.toUpperCase()} — ${selectedModel}` : `${provider.toUpperCase()} (MODEL REQUIRED)`}
               </span>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-              {/* Basic Mode Card */}
+            {/* 3 Provider Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {/* 1. Basic Mode Card */}
               <div
-                onClick={() => setMode('basic')}
-                className={`p-4 rounded-xl border cursor-pointer transition-all ${
-                  mode === 'basic'
+                onClick={() => setProvider('basic')}
+                className={`p-4 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
+                  provider === 'basic'
                     ? 'bg-amber-50/40 border-amber-400 ring-2 ring-amber-400/20 shadow-2xs'
                     : 'bg-white border-surface-200 hover:border-surface-300'
                 }`}
               >
-                <div className="flex items-center justify-between">
-                  <div className="font-bold text-sm text-surface-900 flex items-center gap-2">
-                    <Zap className="w-4 h-4 text-amber-600" />
-                    Basic Mode (API-Independent)
+                <div>
+                  <div className="flex items-center justify-between">
+                    <div className="font-bold text-xs text-surface-900 flex items-center gap-1.5">
+                      <Zap className="w-4 h-4 text-amber-600" />
+                      <span>Basic Mode</span>
+                    </div>
+                    {provider === 'basic' && <CheckCircle2 className="w-4 h-4 text-amber-600" />}
                   </div>
-                  {mode === 'basic' && <CheckCircle2 className="w-4 h-4 text-amber-600" />}
+                  <p className="text-[11px] text-surface-500 mt-2 leading-relaxed">
+                    100% offline inspection. Deterministic Python logic based on accessible page elements.
+                  </p>
                 </div>
-                <p className="text-[11px] text-surface-500 mt-2 leading-relaxed">
-                  Extracts live HTML DOM controls and uses deterministic Python test logic. 100% offline with zero external API dependencies.
-                </p>
-                <div className="mt-3 flex items-center gap-2 text-[10px] text-amber-700 font-mono font-semibold">
-                  <span>✓ Always Available</span>
-                  <span>•</span>
-                  <span>✓ No API Key Required</span>
+                <div className="mt-3 pt-2 border-t border-surface-100 flex items-center gap-1.5 text-[10px] text-amber-700 font-mono font-semibold">
+                  <Check className="w-3 h-3" />
+                  <span>No API Key Required</span>
                 </div>
               </div>
 
-              {/* AI Mode Card */}
+              {/* 2. Google Gemini Card */}
               <div
-                onClick={() => setMode('ai')}
-                className={`p-4 rounded-xl border cursor-pointer transition-all ${
-                  mode === 'ai'
+                onClick={() => setProvider('gemini')}
+                className={`p-4 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
+                  provider === 'gemini'
+                    ? 'bg-blue-50/40 border-blue-400 ring-2 ring-blue-400/20 shadow-2xs'
+                    : 'bg-white border-surface-200 hover:border-surface-300'
+                }`}
+              >
+                <div>
+                  <div className="flex items-center justify-between">
+                    <div className="font-bold text-xs text-surface-900 flex items-center gap-1.5">
+                      <Sparkles className="w-4 h-4 text-blue-600" />
+                      <span>Google Gemini</span>
+                    </div>
+                    {provider === 'gemini' && <CheckCircle2 className="w-4 h-4 text-blue-600" />}
+                  </div>
+                  <p className="text-[11px] text-surface-500 mt-2 leading-relaxed">
+                    Official Google Gen AI SDK. Models dynamically queried using your GEMINI_API_KEY.
+                  </p>
+                </div>
+                <div className="mt-3 pt-2 border-t border-surface-100 text-[10px] font-mono">
+                  {isGeminiConfigured ? (
+                    <span className="text-emerald-700 font-semibold flex items-center gap-1">
+                      <Check className="w-3 h-3" /> Key in .env ({settings?.gemini_masked_key || '***'})
+                    </span>
+                  ) : (
+                    <span className="text-rose-700 font-semibold flex items-center gap-1">
+                      <AlertTriangle className="w-3 h-3" /> GEMINI_API_KEY missing in .env
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* 3. OpenAI Card */}
+              <div
+                onClick={() => setProvider('openai')}
+                className={`p-4 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
+                  provider === 'openai'
                     ? 'bg-purple-50/40 border-purple-400 ring-2 ring-purple-400/20 shadow-2xs'
                     : 'bg-white border-surface-200 hover:border-surface-300'
                 }`}
               >
-                <div className="flex items-center justify-between">
-                  <div className="font-bold text-sm text-surface-900 flex items-center gap-2">
-                    <Bot className="w-4 h-4 text-purple-600" />
-                    AI Mode (OpenAI Reasoning)
+                <div>
+                  <div className="flex items-center justify-between">
+                    <div className="font-bold text-xs text-surface-900 flex items-center gap-1.5">
+                      <Bot className="w-4 h-4 text-purple-600" />
+                      <span>OpenAI API</span>
+                    </div>
+                    {provider === 'openai' && <CheckCircle2 className="w-4 h-4 text-purple-600" />}
                   </div>
-                  {mode === 'ai' && <CheckCircle2 className="w-4 h-4 text-purple-600" />}
+                  <p className="text-[11px] text-surface-500 mt-2 leading-relaxed">
+                    Official OpenAI SDK. Models dynamically queried using your OPENAI_API_KEY.
+                  </p>
                 </div>
-                <p className="text-[11px] text-surface-500 mt-2 leading-relaxed">
-                  Generates exploratory boundary tests and edge-case validations using OpenAI structured schemas.
-                </p>
-                <div className="mt-3 text-[10px] font-mono">
-                  {isAiConfigured ? (
-                    <span className="text-emerald-700 font-semibold">✓ OpenAI API Key Configured</span>
+                <div className="mt-3 pt-2 border-t border-surface-100 text-[10px] font-mono">
+                  {isOpenAiConfigured ? (
+                    <span className="text-emerald-700 font-semibold flex items-center gap-1">
+                      <Check className="w-3 h-3" /> Key in .env ({settings?.openai_masked_key || '***'})
+                    </span>
                   ) : (
-                    <span className="text-amber-700 font-semibold">⚠ Key Missing (Will fallback to Basic)</span>
+                    <span className="text-rose-700 font-semibold flex items-center gap-1">
+                      <AlertTriangle className="w-3 h-3" /> OPENAI_API_KEY missing in .env
+                    </span>
                   )}
                 </div>
               </div>
             </div>
+
+            {/* Dynamic Model Dropdown (ONLY for Gemini & OpenAI) */}
+            {provider !== 'basic' && (
+              <div className="p-4 rounded-xl bg-surface-50 border border-surface-200 space-y-3 mt-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs font-bold text-surface-900 flex items-center gap-1.5">
+                      <span>Select {provider === 'gemini' ? 'Google Gemini' : 'OpenAI'} Model</span>
+                      <span className="text-rose-500 font-bold">*</span>
+                    </label>
+                    <span className="text-[10px] font-mono text-surface-500">
+                      ({currentModelList.length} models retrieved from provider API)
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {/* Refresh Models Control */}
+                    <button
+                      type="button"
+                      onClick={() => fetchModelsForProvider(provider, true)}
+                      disabled={modelsLoading}
+                      className="text-xs px-2.5 py-1 rounded-lg bg-white border border-surface-200 text-surface-700 hover:text-surface-900 hover:bg-surface-100 flex items-center gap-1.5 transition-colors font-medium shadow-2xs"
+                    >
+                      <RefreshCw className={`w-3 h-3 text-blue-600 ${modelsLoading ? 'animate-spin' : ''}`} />
+                      <span>{modelsLoading ? 'Discovering...' : 'Refresh Models'}</span>
+                    </button>
+
+                    {/* Validate Selected Model Button */}
+                    <button
+                      type="button"
+                      onClick={handleValidateSelectedModel}
+                      disabled={validatingModel || !selectedModel}
+                      className="text-xs px-2.5 py-1 rounded-lg bg-white border border-surface-200 text-surface-700 hover:text-surface-900 hover:bg-surface-100 flex items-center gap-1.5 transition-colors font-medium shadow-2xs disabled:opacity-40"
+                    >
+                      {validatingModel ? (
+                        <RefreshCw className="w-3 h-3 animate-spin text-blue-600" />
+                      ) : (
+                        <ShieldCheck className="w-3 h-3 text-emerald-600" />
+                      )}
+                      <span>Test Model Usability</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Model Selection Dropdown (Strictly dynamic with NO hardcoded fallback options) */}
+                <select
+                  value={selectedModel}
+                  onChange={(e) => {
+                    setSelectedModel(e.target.value);
+                    setValidationResult(null);
+                    setError('');
+                  }}
+                  className="w-full bg-white border border-surface-200 text-surface-900 text-xs rounded-lg px-3 py-2.5 font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                >
+                  <option value="">-- Choose a dynamically discovered model --</option>
+                  {currentModelList.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name || m.id} {m.is_free_tier ? '• Free Tier Available' : ''}
+                    </option>
+                  ))}
+                </select>
+
+                {/* Optional User-Configurable Gemini Failover Alternatives */}
+                {provider === 'gemini' && currentModelList.length > 1 && (
+                  <div className="p-3 rounded-lg bg-surface-50 border border-surface-200 space-y-2 mt-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+                        <span className="text-xs font-semibold text-surface-800">
+                          Configured Gemini Alternative Models (Failover)
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-surface-500 font-mono font-semibold">
+                        {alternativeModels.length} selected
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-surface-500 leading-relaxed">
+                      If the primary model is temporarily unavailable (503 / 429 / 404), the engine will retry up to 3 times with exponential backoff &amp; jitter, then attempt these configured Gemini alternatives. It will strictly never switch to OpenAI or Basic Mode.
+                    </p>
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {currentModelList
+                        .filter(m => m.id !== selectedModel)
+                        .slice(0, 10)
+                        .map(m => {
+                          const isSelected = alternativeModels.includes(m.id);
+                          return (
+                            <button
+                              key={m.id}
+                              type="button"
+                              onClick={() => {
+                                if (isSelected) {
+                                  setAlternativeModels(alternativeModels.filter(id => id !== m.id));
+                                } else {
+                                  setAlternativeModels([...alternativeModels, m.id]);
+                                }
+                              }}
+                              className={`text-[11px] font-mono px-2.5 py-1 rounded-md border transition-all ${
+                                isSelected
+                                  ? 'bg-blue-600 text-white border-blue-600 font-semibold shadow-2xs'
+                                  : 'bg-white text-surface-700 border-surface-200 hover:border-surface-300 hover:bg-surface-100'
+                              }`}
+                            >
+                              {isSelected ? '✓ ' : '+ '}{m.name || m.id}
+                            </button>
+                          );
+                        })}
+                    </div>
+                  </div>
+                )}
+
+                {currentModelList.length === 0 && !modelsLoading && (
+                  <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
+                    <div>
+                      <span className="font-bold block">No Models Discovered</span>
+                      <span className="text-[11px] text-amber-800">
+                        {discoveryError || `Ensure ${provider === 'gemini' ? 'GEMINI_API_KEY' : 'OPENAI_API_KEY'} is configured in backend/.env, then click "Refresh Models".`}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Real Model Validation Result Banner */}
+                {validationResult && (
+                  <div className={`p-3 rounded-lg border text-xs flex items-start gap-2 ${
+                    validationResult.valid
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                      : 'bg-rose-50 border-rose-200 text-rose-800'
+                  }`}>
+                    {validationResult.valid ? (
+                      <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 mt-0.5" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
+                    )}
+                    <div>
+                      <span className="font-bold block">
+                        {validationResult.valid ? `Model Verified Active (${validationResult.latency_ms}ms)` : `Model Validation Failed (${validationResult.error_type || 'Error'})`}
+                      </span>
+                      <span className="text-[11px] text-surface-600">{validationResult.message}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Framework Selector */}
@@ -485,7 +792,7 @@ export default function NewRun({ onRunStarted, defaultFramework = 'playwright' }
             </div>
             <div className="flex items-center justify-between py-2 text-xs">
               <div>
-                <span className="font-semibold text-surface-800">Visual Evidence</span>
+                <span className="font-semibold text-surface-800">Visual Evidence &amp; Traces</span>
                 <p className="text-[11px] text-surface-500">Automatically capture failure screenshots and pytest stdout logs</p>
               </div>
               <span className="text-[11px] font-mono font-semibold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
@@ -543,13 +850,17 @@ export default function NewRun({ onRunStarted, defaultFramework = 'playwright' }
               </div>
 
               <div className="p-3.5 rounded-xl bg-surface-50 border border-surface-200 space-y-2">
-                <span className="font-bold text-surface-500 uppercase font-mono text-[10px]">Engine & Settings</span>
+                <span className="font-bold text-surface-500 uppercase font-mono text-[10px]">Engine &amp; Intelligence</span>
                 <div className="flex items-center gap-2">
                   <span className="font-mono font-bold text-surface-900 uppercase">{framework}</span>
                   <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
-                    mode === 'basic' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-purple-50 text-purple-700 border-purple-200'
+                    provider === 'basic'
+                      ? 'bg-amber-50 text-amber-700 border-amber-200'
+                      : provider === 'gemini'
+                      ? 'bg-blue-50 text-blue-700 border-blue-200'
+                      : 'bg-purple-50 text-purple-700 border-purple-200'
                   }`}>
-                    {mode.toUpperCase()} MODE
+                    {provider === 'basic' ? 'BASIC MODE' : `${provider.toUpperCase()} — ${selectedModel}`}
                   </span>
                 </div>
                 <div className="text-[11px] text-surface-500">
@@ -561,7 +872,7 @@ export default function NewRun({ onRunStarted, defaultFramework = 'playwright' }
             {/* Pipeline Preview */}
             <div className="p-4 rounded-xl border border-surface-200 bg-surface-50/70">
               <span className="text-[10px] font-mono font-bold text-surface-400 uppercase block mb-2">
-                Execution Workflow Pipeline
+                6-Agent Execution Pipeline (Strictly enforces user-selected model across all agents)
               </span>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 text-center text-xs">
                 <div className="p-2 rounded bg-white border border-surface-200 text-surface-700 font-medium">1. Requirements</div>
@@ -584,12 +895,14 @@ export default function NewRun({ onRunStarted, defaultFramework = 'playwright' }
                 {loading ? (
                   <>
                     <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                    <span>Initiating 6-Agent Collaboration...</span>
+                    <span>Initiating 6-Agent Fleet with {provider.toUpperCase()}...</span>
                   </>
                 ) : (
                   <>
                     <Play className="w-4 h-4 fill-current" />
-                    <span>Launch Testing Run ({mode.toUpperCase()} • {framework.toUpperCase()})</span>
+                    <span>
+                      Launch Testing Run ({provider === 'basic' ? 'BASIC' : `${provider.toUpperCase()} • ${selectedModel}`} • {framework.toUpperCase()})
+                    </span>
                   </>
                 )}
               </button>
